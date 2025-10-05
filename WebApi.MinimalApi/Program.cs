@@ -11,7 +11,9 @@ builder.Services.AddAutoMapper(cfg =>
 {
     cfg.CreateMap<UserEntity, UserDto>()
         .ForMember(dest => dest.FullName, opt => opt.MapFrom(src => $"{src.LastName} {src.FirstName}"));
-    cfg.CreateMap<OuterUserDto, UserEntity>();
+    cfg.CreateMap<PostCreateUserDto, UserEntity>();
+    cfg.CreateMap<PutUpsertUserDto, UserEntity>();
+    cfg.CreateMap<UserEntity, PutUpsertUserDto>();
     // TODO
 }, Array.Empty<Assembly>());
 builder.Services.AddControllers(options =>

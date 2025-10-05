@@ -1,4 +1,5 @@
 ﻿using AutoMapper;
+using Microsoft.AspNetCore.JsonPatch;
 using Microsoft.AspNetCore.Mvc;
 using WebApi.MinimalApi.Domain;
 using WebApi.MinimalApi.Models;
@@ -32,7 +33,7 @@ public class UsersController : Controller
 
     [HttpPost]
     [Produces("application/json", "application/xml")]
-    public IActionResult CreateUser([FromBody] OuterUserDto? user)
+    public IActionResult CreateUser([FromBody] PostCreateUserDto? user)
     {
         if (user is null)
             return BadRequest();
@@ -50,5 +51,62 @@ public class UsersController : Controller
             nameof(GetUserById),
             new { userId = createdUserEntity.Id },
             createdUserEntity.Id);
+    }
+
+    [HttpPut("{userId}")]
+    [Produces("application/json", "application/xml")]
+    public IActionResult UpsertUser([FromRoute] Guid userId, [FromBody] PutUpsertUserDto? user)
+    {
+        if (userId == Guid.Empty || user is null)
+        {
+            return BadRequest();
+        }
+
+        if (!ModelState.IsValid)
+        {
+            return UnprocessableEntity(ModelState);
+        }
+
+        var userEntity = mapper.Map(user, new UserEntity(userId));
+        userRepository.UpdateOrInsert(userEntity, out var isInserted);
+        if (isInserted)
+        {
+            return CreatedAtRoute(
+                nameof(GetUserById),
+                new { userId = userEntity.Id },
+                userEntity.Id);
+        }
+
+        return NoContent();
+    }
+
+    [HttpPatch("{userId}")]
+    [Produces("application/json", "application/xml")]
+    public IActionResult PartiallyUpdateUser([FromRoute] Guid userId, [FromBody] JsonPatchDocument<PutUpsertUserDto>? patchDoc)
+    {
+        if (patchDoc is null) return BadRequest();
+        if (userId == Guid.Empty) return NotFound();
+        var user = userRepository.FindById(userId);
+        if (user == null) return NotFound();
+        var initialUserDto = mapper.Map<PutUpsertUserDto>(user);
+        patchDoc.ApplyTo(initialUserDto, ModelState);
+        if (string.IsNullOrEmpty(initialUserDto.FirstName))
+        {
+            ModelState.AddModelError("firstName", "Invalid First Name");
+            return UnprocessableEntity(ModelState);
+        }
+        if (string.IsNullOrEmpty(initialUserDto.LastName))
+        {
+            ModelState.AddModelError("lastName", "Invalid Last Name");
+            return UnprocessableEntity(ModelState);
+        }
+        if (!TryValidateModel(initialUserDto) || !ModelState.IsValid)
+        {
+            return UnprocessableEntity(ModelState);
+        }
+
+        var newUser = mapper.Map<UserEntity>(initialUserDto);
+        userRepository.Insert(newUser);
+        return NoContent();
     }
 }
