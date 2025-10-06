@@ -1,6 +1,7 @@
 ﻿using AutoMapper;
 using Microsoft.AspNetCore.JsonPatch;
 using Microsoft.AspNetCore.Mvc;
+using Newtonsoft.Json;
 using WebApi.MinimalApi.Domain;
 using WebApi.MinimalApi.Models;
 
@@ -13,12 +14,14 @@ public class UsersController : Controller
     private readonly IMapper mapper;
 
     private readonly IUserRepository userRepository;
+    private LinkGenerator linkGenerator;
 
     // Чтобы ASP.NET положил что-то в userRepository требуется конфигурация
-    public UsersController(IUserRepository userRepository, IMapper mapper)
+    public UsersController(IUserRepository userRepository, IMapper mapper, LinkGenerator linkGenerator)
     {
         this.userRepository = userRepository;
         this.mapper = mapper;
+        this.linkGenerator = linkGenerator;
     }
 
     [HttpGet("{userId}", Name = nameof(GetUserById))]
@@ -29,6 +32,16 @@ public class UsersController : Controller
         if (user == null) return NotFound();
         var userDto = mapper.Map<UserDto>(user);
         return Ok(userDto);
+    }
+
+    [HttpHead("{userId}")]
+    [Produces("application/json")]
+    public IActionResult Post([FromRoute] Guid userId)
+    {
+        var user = userRepository.FindById(userId);
+        if (user == null) return NotFound();
+        Response.ContentType = "application/json; charset=utf-8";
+        return Ok();
     }
 
     [HttpPost]
@@ -95,18 +108,76 @@ public class UsersController : Controller
             ModelState.AddModelError("firstName", "Invalid First Name");
             return UnprocessableEntity(ModelState);
         }
+
         if (string.IsNullOrEmpty(initialUserDto.LastName))
         {
             ModelState.AddModelError("lastName", "Invalid Last Name");
             return UnprocessableEntity(ModelState);
         }
+
         if (!TryValidateModel(initialUserDto) || !ModelState.IsValid)
         {
             return UnprocessableEntity(ModelState);
         }
 
+
         var newUser = mapper.Map<UserEntity>(initialUserDto);
         userRepository.Insert(newUser);
         return NoContent();
+    }
+
+    [HttpDelete("{userId}")]
+    [Produces("application/json", "application/xml")]
+    public IActionResult DeleteUser([FromRoute] Guid userId)
+    {
+        var user = userRepository.FindById(userId);
+        if (user == null) return NotFound();
+        userRepository.Delete(userId);
+        return NoContent();
+    }
+
+    [HttpGet(Name = nameof(GetUsers))]
+    [Produces("application/json", "application/xml")]
+    public IActionResult GetUsers([FromQuery] int pageNumber = 1, [FromQuery] int pageSize = 10)
+    {
+        pageNumber = pageNumber < 1 ? 1 : pageNumber;
+        pageSize = pageSize < 1 ? 1 : pageSize;
+        pageSize = pageSize > 20 ? 20 : pageSize;
+        var pageList = userRepository.GetPage(pageNumber, pageSize);
+        var users = mapper.Map<IEnumerable<UserDto>>(pageList);
+        string? previousLink = null;
+        if (pageNumber > 1)
+        {
+            previousLink = linkGenerator.GetUriByRouteValues(HttpContext, nameof(GetUsers), new
+            {
+                pageNumber = pageNumber - 1,
+                pageSize = pageSize
+            });
+        }
+
+        var nextLink = linkGenerator.GetUriByRouteValues(HttpContext, nameof(GetUsers), new
+        {
+            pageNumber = pageNumber + 1,
+            pageSize = pageSize
+        });
+        var paginationHeader = new
+        {
+            previousPageLink = previousLink,
+            nextPageLink = nextLink,
+            pageSize = pageSize,
+            currentPage = pageNumber,
+            totalCount = 1,
+            totalPages = 1
+        };
+        Response.Headers.Append("X-Pagination", JsonConvert.SerializeObject(paginationHeader));
+        return Ok(users);
+    }
+
+    [HttpOptions]
+    [Produces("application/json", "application/xml")]
+    public IActionResult Options()
+    {
+        Response.Headers.Append("Allow", "POST, GET, OPTIONS");
+        return Ok();
     }
 }
