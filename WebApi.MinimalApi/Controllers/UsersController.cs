@@ -26,20 +26,17 @@ public class UsersController : Controller
 
     [HttpGet("{userId}", Name = nameof(GetUserById))]
     [Produces("application/json", "application/xml")]
-    public ActionResult<UserDto> GetUserById([FromRoute] Guid userId)
+    public IActionResult GetUserById([FromRoute] Guid userId)
     {
-        var user = userRepository.FindById(userId);
-        if (user == null) return NotFound();
-        var userDto = mapper.Map<UserDto>(user);
-        return Ok(userDto);
+        if (!TryFindUser(userId, out var user)) return NotFound();
+        return Ok(mapper.Map<UserDto>(user));
     }
 
     [HttpHead("{userId}")]
     [Produces("application/json")]
-    public IActionResult Post([FromRoute] Guid userId)
+    public IActionResult Head([FromRoute] Guid userId)
     {
-        var user = userRepository.FindById(userId);
-        if (user == null) return NotFound();
+        if (!TryFindUser(userId, out _)) return NotFound();
         Response.ContentType = "application/json; charset=utf-8";
         return Ok();
     }
@@ -49,17 +46,16 @@ public class UsersController : Controller
     public IActionResult CreateUser([FromBody] PostCreateUserDto? user)
     {
         if (user is null)
-            return BadRequest();
-        if (string.IsNullOrEmpty(user.Login) || !user.Login.All(char.IsLetterOrDigit))
         {
-            ModelState.AddModelError("login", "Invalid login");
+            return BadRequest();
+        }
+
+        if (!ValidateData(user))
+        {
             return UnprocessableEntity(ModelState);
         }
 
-
-        var userEntity = mapper.Map<UserEntity>(user);
-
-        var createdUserEntity = userRepository.Insert(userEntity);
+        var createdUserEntity = userRepository.Insert(mapper.Map<UserEntity>(user));
         return CreatedAtRoute(
             nameof(GetUserById),
             new { userId = createdUserEntity.Id },
@@ -70,7 +66,7 @@ public class UsersController : Controller
     [Produces("application/json", "application/xml")]
     public IActionResult UpsertUser([FromRoute] Guid userId, [FromBody] PutUpsertUserDto? user)
     {
-        if (userId == Guid.Empty || user is null)
+        if (!ValidateData(userId) || user == null)
         {
             return BadRequest();
         }
@@ -82,47 +78,36 @@ public class UsersController : Controller
 
         var userEntity = mapper.Map(user, new UserEntity(userId));
         userRepository.UpdateOrInsert(userEntity, out var isInserted);
-        if (isInserted)
-        {
-            return CreatedAtRoute(
+        return isInserted
+            ? CreatedAtRoute(
                 nameof(GetUserById),
                 new { userId = userEntity.Id },
-                userEntity.Id);
-        }
-
-        return NoContent();
+                userEntity.Id)
+            : NoContent();
     }
 
     [HttpPatch("{userId}")]
     [Produces("application/json", "application/xml")]
     public IActionResult PartiallyUpdateUser([FromRoute] Guid userId, [FromBody] JsonPatchDocument<PutUpsertUserDto>? patchDoc)
     {
-        if (patchDoc is null) return BadRequest();
-        if (userId == Guid.Empty) return NotFound();
-        var user = userRepository.FindById(userId);
-        if (user == null) return NotFound();
-        var initialUserDto = mapper.Map<PutUpsertUserDto>(user);
-        patchDoc.ApplyTo(initialUserDto, ModelState);
-        if (string.IsNullOrEmpty(initialUserDto.FirstName))
+        if (patchDoc is null)
         {
-            ModelState.AddModelError("firstName", "Invalid First Name");
-            return UnprocessableEntity(ModelState);
+            return BadRequest();
         }
 
-        if (string.IsNullOrEmpty(initialUserDto.LastName))
+        if (!ValidateData(userId) || !TryFindUser(userId, out var user))
         {
-            ModelState.AddModelError("lastName", "Invalid Last Name");
-            return UnprocessableEntity(ModelState);
+            return NotFound();
         }
 
-        if (!TryValidateModel(initialUserDto) || !ModelState.IsValid)
+        var initialDto = mapper.Map<PutUpsertUserDto>(user);
+        patchDoc.ApplyTo(initialDto, ModelState);
+        if (!ValidateData(initialDto))
         {
             return UnprocessableEntity(ModelState);
         }
 
-
-        var newUser = mapper.Map<UserEntity>(initialUserDto);
-        userRepository.Insert(newUser);
+        userRepository.Insert(mapper.Map<UserEntity>(initialDto));
         return NoContent();
     }
 
@@ -130,8 +115,7 @@ public class UsersController : Controller
     [Produces("application/json", "application/xml")]
     public IActionResult DeleteUser([FromRoute] Guid userId)
     {
-        var user = userRepository.FindById(userId);
-        if (user == null) return NotFound();
+        if (!TryFindUser(userId, out var user)) return NotFound();
         userRepository.Delete(userId);
         return NoContent();
     }
@@ -140,13 +124,11 @@ public class UsersController : Controller
     [Produces("application/json", "application/xml")]
     public IActionResult GetUsers([FromQuery] int pageNumber = 1, [FromQuery] int pageSize = 10)
     {
-        pageNumber = pageNumber < 1 ? 1 : pageNumber;
-        pageSize = pageSize < 1 ? 1 : pageSize;
-        pageSize = pageSize > 20 ? 20 : pageSize;
+        pageNumber = Math.Max(1, pageNumber);
+        pageSize = Math.Clamp(pageSize, 1, 20);
         var pageList = userRepository.GetPage(pageNumber, pageSize);
         var users = mapper.Map<IEnumerable<UserDto>>(pageList);
-        var paginationHeader = GeneratePageLink(pageList, pageNumber, pageSize);
-        Response.Headers.Append("X-Pagination", paginationHeader);
+        Response.Headers.Append("X-Pagination", GeneratePageLink(pageList, pageNumber, pageSize));
         return Ok(users);
     }
 
@@ -186,5 +168,45 @@ public class UsersController : Controller
             totalPages = (int)Math.Ceiling((double)totalCount / pageSize)
         };
         return JsonConvert.SerializeObject(paginationHeader);
+    }
+
+    private bool TryFindUser(Guid userId, out UserEntity? user)
+    {
+        user = userRepository.FindById(userId);
+        return user != null;
+    }
+
+    private bool ValidateData(Guid userId)
+    {
+        return userId != Guid.Empty;
+    }
+
+    private bool ValidateData(PutUpsertUserDto putUpsertDto)
+    {
+        if (string.IsNullOrEmpty(putUpsertDto.FirstName))
+        {
+            ModelState.AddModelError("firstName", "Invalid First Name");
+            return false;
+        }
+
+        if (string.IsNullOrEmpty(putUpsertDto.LastName))
+        {
+            ModelState.AddModelError("lastName", "Invalid Last Name");
+            return false;
+        }
+
+        if (!TryValidateModel(putUpsertDto) || !ModelState.IsValid)
+        {
+            return false;
+        }
+
+        return true;
+    }
+
+    private bool ValidateData(PostCreateUserDto? user)
+    {
+        if (!string.IsNullOrEmpty(user.Login) && user.Login.All(char.IsLetterOrDigit)) return true;
+        ModelState.AddModelError("login", "Invalid login");
+        return false;
     }
 }
