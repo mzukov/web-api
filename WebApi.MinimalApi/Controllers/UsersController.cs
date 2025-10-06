@@ -14,7 +14,7 @@ public class UsersController : Controller
     private readonly IMapper mapper;
 
     private readonly IUserRepository userRepository;
-    private LinkGenerator linkGenerator;
+    private readonly LinkGenerator linkGenerator;
 
     // Чтобы ASP.NET положил что-то в userRepository требуется конфигурация
     public UsersController(IUserRepository userRepository, IMapper mapper, LinkGenerator linkGenerator)
@@ -145,6 +145,22 @@ public class UsersController : Controller
         pageSize = pageSize > 20 ? 20 : pageSize;
         var pageList = userRepository.GetPage(pageNumber, pageSize);
         var users = mapper.Map<IEnumerable<UserDto>>(pageList);
+        var paginationHeader = GeneratePageLink(pageList, pageNumber, pageSize);
+        Response.Headers.Append("X-Pagination", paginationHeader);
+        return Ok(users);
+    }
+
+    [HttpOptions]
+    [Produces("application/json", "application/xml")]
+    public IActionResult Options()
+    {
+        Response.Headers.Append("Allow", "POST, GET, OPTIONS");
+        return Ok();
+    }
+
+    private string GeneratePageLink(PageList<UserEntity> pageList, int pageNumber, int pageSize)
+    {
+        var totalCount = pageList.TotalCount;
         string? previousLink = null;
         if (pageNumber > 1)
         {
@@ -166,18 +182,9 @@ public class UsersController : Controller
             nextPageLink = nextLink,
             pageSize = pageSize,
             currentPage = pageNumber,
-            totalCount = 1,
-            totalPages = 1
+            totalCount = totalCount,
+            totalPages = (int)Math.Ceiling((double)totalCount / pageSize)
         };
-        Response.Headers.Append("X-Pagination", JsonConvert.SerializeObject(paginationHeader));
-        return Ok(users);
-    }
-
-    [HttpOptions]
-    [Produces("application/json", "application/xml")]
-    public IActionResult Options()
-    {
-        Response.Headers.Append("Allow", "POST, GET, OPTIONS");
-        return Ok();
+        return JsonConvert.SerializeObject(paginationHeader);
     }
 }
